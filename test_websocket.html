@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Audio Stream Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 5px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+        }
+        .log-sent {
+            color: #2196F3;
+        }
+        .log-received {
+            color: #4CAF50;
+        }
+        .log-error {
+            color: #f44336;
+            font-weight: bold;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        input[type="number"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin: 0 10px;
+            width: 100px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 WebSocket Audio Stream Test</h1>
+        
+        <div id="status" class="status disconnected">
+            Status: Disconnected
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+            <button id="sendChunkBtn" onclick="sendAudioChunk()" disabled>Send Audio Chunk</button>
+            <button id="streamBtn" onclick="startStreaming()" disabled>Start Streaming</button>
+            <button id="stopStreamBtn" onclick="stopStreaming()" disabled>Stop Streaming</button>
+            <button id="clearLogBtn" onclick="clearLog()">Clear Log</button>
+        </div>
+
+        <div class="controls">
+            <label>
+                Chunk Size (bytes):
+                <input type="number" id="chunkSize" value="1024" min="10" max="100000">
+            </label>
+            <label>
+                Stream Interval (ms):
+                <input type="number" id="streamInterval" value="100" min="10" max="5000">
+            </label>
+        </div>
+
+        <div class="log" id="log">
+            <div class="log-entry">Waiting to connect...</div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let streamingInterval = null;
+        let chunkCounter = 0;
+
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const sendChunkBtn = document.getElementById('sendChunkBtn');
+            const streamBtn = document.getElementById('streamBtn');
+            const stopStreamBtn = document.getElementById('stopStreamBtn');
+
+            if (connected) {
+                status.textContent = 'Status: Connected ✓';
+                status.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                sendChunkBtn.disabled = false;
+                streamBtn.disabled = false;
+            } else {
+                status.textContent = 'Status: Disconnected';
+                status.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                sendChunkBtn.disabled = true;
+                streamBtn.disabled = true;
+                stopStreamBtn.disabled = true;
+            }
+        }
+
+        function connect() {
+            const wsUrl = 'ws://localhost:8000/ws/audio/';
+            addLog(`Connecting to ${wsUrl}...`);
+
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    addLog('✓ WebSocket connected successfully!', 'received');
+                    updateStatus(true);
+                    chunkCounter = 0;
+                };
+
+                ws.onmessage = (event) => {
+                    addLog(`← Received: ${event.data}`, 'received');
+                };
+
+                ws.onerror = (error) => {
+                    addLog('✗ WebSocket error occurred', 'error');
+                    console.error('WebSocket error:', error);
+                };
+
+                ws.onclose = () => {
+                    addLog('WebSocket connection closed', 'error');
+                    updateStatus(false);
+                    stopStreaming();
+                };
+            } catch (error) {
+                addLog(`✗ Connection failed: ${error.message}`, 'error');
+                updateStatus(false);
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                stopStreaming();
+                ws.close();
+                ws = null;
+                addLog('Disconnecting...');
+            }
+        }
+
+        function sendAudioChunk() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addLog('✗ WebSocket not connected', 'error');
+                return;
+            }
+
+            chunkCounter++;
+            const chunkSize = parseInt(document.getElementById('chunkSize').value);
+            
+            // Create simulated audio data (random bytes)
+            const audioData = new Uint8Array(chunkSize);
+            for (let i = 0; i < chunkSize; i++) {
+                audioData[i] = Math.floor(Math.random() * 256);
+            }
+
+            ws.send(audioData.buffer);
+            addLog(`→ Sent audio chunk #${chunkCounter} (${chunkSize} bytes)`, 'sent');
+        }
+
+        function startStreaming() {
+            if (streamingInterval) {
+                return;
+            }
+
+            const interval = parseInt(document.getElementById('streamInterval').value);
+            document.getElementById('stopStreamBtn').disabled = false;
+            document.getElementById('streamBtn').disabled = true;
+
+            addLog(`Starting continuous streaming (${interval}ms interval)...`);
+            
+            streamingInterval = setInterval(() => {
+                sendAudioChunk();
+            }, interval);
+        }
+
+        function stopStreaming() {
+            if (streamingInterval) {
+                clearInterval(streamingInterval);
+                streamingInterval = null;
+                document.getElementById('stopStreamBtn').disabled = true;
+                document.getElementById('streamBtn').disabled = false;
+                addLog('Streaming stopped');
+            }
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '<div class="log-entry">Log cleared</div>';
+        }
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (ws) {
+                ws.close();
+            }
+        });
+    </script>
+</body>
+</html>
